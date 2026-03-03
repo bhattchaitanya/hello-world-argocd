@@ -4,27 +4,66 @@ metadata:
   name: argocd-cm
   namespace: argocd
 data:
-  # Custom resource action for apps/Deployment:
-  # Adds a "Toggle desiredlifecycle" button in the ArgoCD UI under the
-  # Deployment's action menu (⋮ → Actions). Clicking it flips
-  # spec.desiredlifecycle between "true" and "false" live on the cluster
-  # without triggering a sync (ignoreDifferences exempts this label).
+  # Health check: shows "Enabled" or "Disabled" as the health message
+  # next to the Deployment in the ArgoCD resource tree, based on the
+  # spec.desiredlifecycle label value.
+  resource.customizations.health.apps_Deployment: |
+    local hs = {}
+    if obj.status == nil then
+      hs.status = "Progressing"
+      hs.message = "Waiting for deployment"
+      return hs
+    end
+    if obj.status.conditions ~= nil then
+      for _, condition in ipairs(obj.status.conditions) do
+        if condition.type == "Progressing" and condition.reason == "ProgressDeadlineExceeded" then
+          hs.status = "Degraded"
+          hs.message = condition.message
+          return hs
+        end
+      end
+    end
+    local desired   = obj.spec.replicas or 1
+    local available = obj.status.availableReplicas or 0
+    local lifecycle = ""
+    if obj.spec.template.metadata ~= nil and obj.spec.template.metadata.labels ~= nil then
+      local val = obj.spec.template.metadata.labels["spec.desiredlifecycle"]
+      if val == "true" then
+        lifecycle = "Enabled"
+      elseif val == "false" then
+        lifecycle = "Disabled"
+      end
+    end
+    if available >= desired then
+      hs.status = "Healthy"
+      hs.message = lifecycle
+    else
+      hs.status = "Progressing"
+      hs.message = "Waiting for replicas (" .. tostring(available) .. "/" .. tostring(desired) .. ")"
+                   .. (lifecycle ~= "" and " · " .. lifecycle or "")
+    end
+    return hs
+
+  # Context-aware actions: shows "enable" when lifecycle=false,
+  # shows "disable" when lifecycle=true. Each directly patches the label.
   resource.customizations.actions.apps_Deployment: |
     discovery.lua: |
-      actions = {}
-      actions["toggle-desiredlifecycle"] = {["disabled"] = false}
+      local actions = {}
+      local labels = obj.spec.template.metadata and obj.spec.template.metadata.labels
+      if labels ~= nil then
+        if labels["spec.desiredlifecycle"] == "true" then
+          actions["disable"] = {["disabled"] = false}
+        else
+          actions["enable"] = {["disabled"] = false}
+        end
+      end
       return actions
     definitions:
-    - name: toggle-desiredlifecycle
+    - name: enable
       action.lua: |
-        local labels = obj.spec.template.metadata.labels
-        if labels == nil then
-          labels = {}
-          obj.spec.template.metadata.labels = labels
-        end
-        if labels["spec.desiredlifecycle"] == "true" then
-          labels["spec.desiredlifecycle"] = "false"
-        else
-          labels["spec.desiredlifecycle"] = "true"
-        end
+        obj.spec.template.metadata.labels["spec.desiredlifecycle"] = "true"
+        return obj
+    - name: disable
+      action.lua: |
+        obj.spec.template.metadata.labels["spec.desiredlifecycle"] = "false"
         return obj
