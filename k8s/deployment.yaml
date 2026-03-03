@@ -14,6 +14,7 @@ spec:
     metadata:
       labels:
         app: hello-world
+        spec.desiredlifecycle: "true"
     spec:
       containers:
         - name: hello-world

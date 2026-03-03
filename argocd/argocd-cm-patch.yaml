@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  # Custom resource action for apps/Deployment:
+  # Adds a "Toggle desiredlifecycle" button in the ArgoCD UI under the
+  # Deployment's action menu (⋮ → Actions). Clicking it flips
+  # spec.desiredlifecycle between "true" and "false" live on the cluster
+  # without triggering a sync (ignoreDifferences exempts this label).
+  resource.customizations.actions.apps_Deployment: |
+    discovery.lua: |
+      actions = {}
+      actions["toggle-desiredlifecycle"] = {["disabled"] = false}
+      return actions
+    definitions:
+    - name: toggle-desiredlifecycle
+      action.lua: |
+        local labels = obj.spec.template.metadata.labels
+        if labels == nil then
+          labels = {}
+          obj.spec.template.metadata.labels = labels
+        end
+        if labels["spec.desiredlifecycle"] == "true" then
+          labels["spec.desiredlifecycle"] = "false"
+        else
+          labels["spec.desiredlifecycle"] = "true"
+        end
+        return obj
